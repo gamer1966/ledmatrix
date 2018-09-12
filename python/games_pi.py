@@ -11,17 +11,21 @@ import random, time, sys, socket, threading, queue, socketserver, os
 from PIL import Image
 
 # If Pi = False the script runs in simulation mode using pygame lib
-PI = False
+PI = True
 import pygame
 from pygame.locals import *
-if PI:
-    import serial
-    import max7219.led as led
-    from max7219.font import proportional, SINCLAIR_FONT, TINY_FONT, CP437_FONT
+#if PI:
+from luma.led_matrix.device import max7219
+from luma.core.interface.serial import spi, noop
+from luma.core.render import canvas
+from luma.core.virtual import viewport
+from luma.core.legacy import text, show_message
+from luma.core.legacy.font import proportional, CP437_FONT, TINY_FONT, SINCLAIR_FONT, LCD_FONT    
+import serial
 
 # only modify this two values for size adaption!
 PIXEL_X=10
-PIXEL_Y=20
+PIXEL_Y=30
 
 SIZE= 20
 FPS = 15
@@ -217,8 +221,9 @@ theTetrisFont = [
 # serial port pi #
 
 if PI:
-    serport=serial.Serial("/dev/ttyAMA0",baudrate= 500000,timeout=3.0)
-    device = led.matrix(cascaded=4)
+    serport=serial.Serial("/dev/serial0",baudrate= 500000,timeout=3.0)
+    serial = spi(port=0, device=0, gpio=noop())
+    device = max7219(serial, cascaded=4, block_orientation=-90, rotate=0)
 
 # key server for controller #
 
@@ -235,21 +240,24 @@ class qEvent:
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
+        a=b=c=b'\00'
         oldstr=b'\x80'  #create event on connection start (0x80 != 0x00)
         while RUNNING:
-            data = self.request.recv(1)
+            self.data = self.request.recv(1)
             #cur_thread = threading.current_thread()
-            #response = bytes("{}: {}".format(cur_thread.name, data), 'ascii')
-            if data:
-                if data!=oldstr:
-                    #print(str(time.time()) + ' -- ' + str(oldstr))
+            #response = bytes("{}: {}".format(cur_thread.name, self.data), 'ascii')
+            if self.data:
+                if self.data!=oldstr:
                     for i in range (0,8):
-                        if (bytes(data[0]&mask[i])!=bytes(oldstr[0]&mask[i])) :
-                            if (bytes(data[0]&mask[i])):
+                        a= self.data[0]
+                        b= mask[i]
+                        c= oldstr[0]
+                        if ((a)&(b))!=((c)&(b)) :
+                            if (a&b):
                                 myQueue.put(qEvent(i,QKEYDOWN))
                             else:
                                 myQueue.put(qEvent(i,QKEYUP))
-                oldstr = data
+                oldstr = self.data
                 #print(data)
             #self.request.sendall(response)
 
@@ -262,7 +270,7 @@ def client(ip, port, message):
     try:
         sock.sendall(bytes(message, 'ascii'))
         response = str(sock.recv(1024), 'ascii')
-        print("Received: {}".format(response))
+        print(("Received: {}".format(response)))
     finally:
         sock.close()
 
@@ -287,8 +295,10 @@ def main():
 #        os.environ["SDL_VIDEODRIVER"] = "dummy" #dummy display for pygame audio
 #        pygame.init()
 #        pygame.mixer.music.load('tetrisb.mid')
-        device.brightness(1)
-        device.show_message("Waiting for controller...", font=proportional(CP437_FONT),delay=0.015)
+        device.contrast(255)
+        msg = "Waiting for controller..."
+        print(msg)
+        show_message(device, msg, fill="white", font=proportional(CP437_FONT))
 
     # Port 0 means to select an arbitrary unused port
 
@@ -303,12 +313,14 @@ def main():
     # Exit the server thread when the main thread terminates
     server_thread.daemon = True
     server_thread.start()
-    print("Server loop running in thread:", server_thread.name)
+    print(("Server loop running in thread:", server_thread.name))
     clearScreen()
 
     drawClock(1)
     if PI:
-        device.show_message("Let's play", font=proportional(CP437_FONT),delay=0.03)
+        msg = "Let's play"
+        print(msg)
+        show_message(device, msg, fill="white", font=proportional(CP437_FONT))
 
     while True:
 
@@ -587,8 +599,8 @@ def runTetrisGame():
     # setup varia
     # bles for the start of the game
     if PI:
-        device.brightness(1)
-        device.flush()
+        device.contrast(255)
+        device.show()
     board = getBlankBoard()
     lastMoveDownTime = time.time()
     lastMoveSidewaysTime = time.time()
@@ -773,7 +785,7 @@ def drawClock(color):
 
     if PI:
         device.clear();
-        device.flush();
+        device.show();
 
     hour =  time.localtime().tm_hour
     minute= time.localtime().tm_min
@@ -799,15 +811,14 @@ def drawClock(color):
         second= ltime.tm_sec
         clearScreen()
 
-        drawnumber(int(hour/10),2,1,color)
-        drawnumber(int(hour%10),6,1,color)
-        drawnumber(int(minute/10),2,8,color)
-        drawnumber(int(minute%10),6,8,color)
-        drawnumber(int(second/10),2,15,color)
-        drawnumber(int(second%10),6,15,color)
-
+        drawnumber(int(hour/10),1,4,color)
+        drawnumber(int(hour%10),5,4,color)
+        drawnumber(int(minute/10),1,11,color)
+        drawnumber(int(minute%10),5,11,color)
+        drawnumber(int(second/10),1,18,color)
+        drawnumber(int(second%10),5,18,color)
+        time.sleep(.6)
         updateScreen()
-        time.sleep(.2)
 
 
 def drawImage(filename):
@@ -832,12 +843,14 @@ def drawHalfImage(filename,offset):
 def clearScreen():
     if PI:
         serport.write(bytearray([32]))
+        time.sleep(.015)
     else:
         DISPLAYSURF.fill(BGCOLOR)
 
 def updateScreen():
     if PI:
         serport.write(bytearray([30]))
+        time.sleep(.015)
     else:
         pygame.display.update()
 
@@ -847,6 +860,7 @@ def drawPixel(x,y,color):
     if PI:
         if (x>=0 and y>=0 and color >=0):
             serport.write(bytearray([26,x,y,color]))
+            time.sleep(.015)
     else:
         pygame.draw.rect(DISPLAYSURF, COLORS[color], (x*SIZE+1, y*SIZE+1, SIZE-2, SIZE-2))
 
@@ -854,6 +868,7 @@ def drawPixelRgb(x,y,r,g,b):
     if PI:
         if (x>=0 and y>=0):
             serport.write(bytearray([24,x,y,r,g,b]))
+            time.sleep(.015)
     else:
         pygame.draw.rect(DISPLAYSURF, (r,g,b), (x*SIZE+1, y*SIZE+1, SIZE-2, SIZE-2))
 
@@ -863,25 +878,26 @@ def drawnumber(number,offsetx,offsety,color):
             if clock_font[3*number + x]&mask[y]:
                 drawPixel(offsetx+x,offsety+y,color)
 
-def drawnumberMAX7219(number,offsetx,offsety):
+def drawnumberMAX7219(number,offsetx,offsety,draw1):
     for x in range(0,3):
         for y in range(0,5):
             if clock_font[3*number+2- x]&mask[y]:
-                drawScorePixel(offsetx+x,offsety+y,1)
+                drawScorePixel(offsetx+x,offsety+y,1,draw1)
             elif clock_font[3*number+2- x]&mask[y]:
-                drawScorePixel(offsetx+x,offsety+y,0)
+                drawScorePixel(offsetx+x,offsety+y,0,draw1)
 
-def drawTetrisMAX7219(piece,offsetx,offsety):
-    for x in range(0,4):
-        for y in range(0,8):
-            if theTetrisFont[4*piece + x]&mask[y]:
-                drawScorePixel(offsetx+x,offsety+y,1)
-            elif theTetrisFont[4*piece + x]&mask[y]:
-                drawScorePixel(offsetx+x,offsety+y,0)
+def drawTetrisMAX7219(piece,offsetx,offsety,draw1):
+        for x in range(0,4):
+            for y in range(0,8):
+                if theTetrisFont[4*piece + x]&mask[y]:
+                    drawScorePixel(offsetx+x,offsety+y,1,draw1)
+                elif theTetrisFont[4*piece + x]&mask[y]:
+                    drawScorePixel(offsetx+x,offsety+y,0,draw1)
 
-def drawScorePixel(x,y,on):
+def drawScorePixel(x,y,on,draw):
     if PI:
-        device.pixel(31-x,y,on,False)
+        draw.point((31-x,y), fill= "white")
+        time.sleep(.01)
     else:
         pygame.draw.rect(DISPLAYSURF, COLORS[2], (64-2*x, 410+2*y,2,2))
 
@@ -891,7 +907,7 @@ def makeTextObjs(text, font, color):
 
 def scrollText(text):
     if PI:
-        device.show_message(text, font=proportional(CP437_FONT))
+        show_message(device, text, fill="white", font=proportional(LCD_FONT), scroll_delay=0.1)
     else:
         titleSurf, titleRect = makeTextObjs(str(text), BASICFONT, TEXTCOLOR)
         titleRect.center = (int(WINDOWWIDTH / 2) - 3, int(WINDOWHEIGHT / 2) - 3)
@@ -902,9 +918,10 @@ def scoreText(score):
     if _score>9999:
         _score = 9999
     if PI:
-        for i in range(0,4):
-            device.letter(3-i, ord('0') + (_score%10))
-            _score //=10
+        with canvas(device) as draw:
+            for i in range(0,4):
+                text(draw, ((3-i)*8, 0), str(_score%10), fill="white")
+                _score //=10
     else:
         titleSurf, titleRect = makeTextObjs(str(_score), BASICFONT, TEXTCOLOR)
         titleRect.center = (int(WINDOWWIDTH / 2) - 3, int(WINDOWHEIGHT / 2) - 3)
@@ -918,19 +935,20 @@ def scoreTetris(score,level,nextpiece):
         _score = 999999
 
     # one point per level
-    for i in range(0,level):
-        drawScorePixel(i*2,7,1)
+    with canvas(device) as draw1:
+        for i in range(0,level):
+            drawScorePixel(i*2,7,1,draw1)
 
-    # score as 6 digit value
-    for i in range(0,6):
-        drawnumberMAX7219(_score%10,i*4,0)
-        _score //=10
+        # score as 6 digit value
+        for i in range(0,6):
+            drawnumberMAX7219(_score%10,i*4,0,draw1)
+            _score //=10
 
-    # draw next piece
-    drawTetrisMAX7219(nextpiece,27,0)
+        # draw next piece
+        drawTetrisMAX7219(nextpiece,27,0,draw1)
 
-    if PI:
-        device.flush()
+        if PI:
+            device.show()
 
 def twoscoreText(score1,score2):
     _score1=score1
@@ -940,10 +958,11 @@ def twoscoreText(score1,score2):
     if _score2>9:
         _score2 = 9
     if PI:
-        device.letter(0, ord('0') + (_score1))
-        device.letter(1, ord(':'))
-        device.letter(2, ord('0') + (_score2))
-        device.letter(3, ord(' '))
+        with canvas(device) as draw:
+            text(draw, (0, 0), str(_score1), fill="white")
+            text(draw, (8, 0), ":", fill="white")
+            text(draw, (16, 0), str(_score2), fill="white")
+            text(draw, (24, 0), " ", fill="white")
     else:
         titleSurf, titleRect = makeTextObjs(str(_score1)+':'+str(_score2), BASICFONT, TEXTCOLOR)
         titleRect.center = (int(WINDOWWIDTH / 2) - 3, int(WINDOWHEIGHT / 2) - 3)
